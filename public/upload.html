@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Open Artifacts 本地上传测试</title>
+<style>
+  :root{
+    --bg:#fafafa; --surface:#fff; --border:#e2e2e2; --text:#1a1a1a; --dim:#6b6b6b;
+    --accent:#2a6df4; --accent-dim:#eaf1ff; --ok:#1c8a4c; --ok-bg:#e7f7ee; --err:#c0392b; --err-bg:#fdecea;
+    --mono: ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --sans: -apple-system,'Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.5;}
+  .wrap{max-width:640px;margin:0 auto;padding:48px 24px 96px;}
+  h1{font-size:20px;margin:0 0 4px;}
+  .sub{color:var(--dim);font-size:13.5px;margin:0 0 32px;}
+  fieldset{border:none;padding:0;margin:0 0 20px;}
+  label{display:block;font-size:13px;font-weight:600;margin-bottom:6px;}
+  .hint{font-size:12px;color:var(--dim);margin-top:4px;}
+  input[type=text],textarea,select{
+    width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:6px;
+    font-size:14px;font-family:var(--sans);background:var(--surface);color:var(--text);
+  }
+  textarea{font-family:var(--mono);font-size:13px;min-height:220px;resize:vertical;}
+  .row{display:flex;gap:16px;}
+  .row > div{flex:1;}
+  .drop{
+    border:2px dashed var(--border);border-radius:8px;padding:20px;text-align:center;
+    color:var(--dim);font-size:13.5px;margin-bottom:10px;cursor:pointer;transition:border-color .15s;
+  }
+  .drop.drag{border-color:var(--accent);background:var(--accent-dim);}
+  .drop input{display:none;}
+  .tabs{display:flex;gap:4px;margin-bottom:10px;}
+  .tab{
+    padding:6px 12px;border-radius:6px;font-size:13px;cursor:pointer;color:var(--dim);
+    border:1px solid transparent;
+  }
+  .tab.active{background:var(--accent-dim);color:var(--accent);font-weight:600;}
+  button{
+    background:var(--accent);color:#fff;border:none;border-radius:6px;
+    padding:11px 20px;font-size:14px;font-weight:600;cursor:pointer;
+  }
+  button:disabled{opacity:.5;cursor:not-allowed;}
+  button.ghost{background:none;color:var(--accent);border:1px solid var(--border);padding:6px 12px;font-size:12.5px;}
+  .result{
+    margin-top:24px;border-radius:8px;padding:16px 18px;border:1px solid var(--border);
+    background:var(--surface);display:none;
+  }
+  .result.ok{border-color:color-mix(in srgb, var(--ok) 40%, var(--border));background:var(--ok-bg);}
+  .result.err{border-color:color-mix(in srgb, var(--err) 40%, var(--border));background:var(--err-bg);}
+  .result.show{display:block;}
+  .result .label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);margin-bottom:4px;}
+  .result a{color:var(--accent);word-break:break-all;font-family:var(--mono);font-size:13.5px;}
+  .result .actions{margin-top:12px;display:flex;gap:8px;}
+  .field-error{color:var(--err);font-size:12px;margin-top:4px;display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Open Artifacts · 本地上传测试</h1>
+  <p class="sub">发布到本地实例 <code id="origin"></code>，同源请求，无需配置 CORS。</p>
+
+  <form id="f">
+    <fieldset>
+      <label>内容来源</label>
+      <div class="tabs">
+        <div class="tab active" data-mode="paste">粘贴 HTML</div>
+        <div class="tab" data-mode="file">上传文件</div>
+      </div>
+
+      <div id="mode-paste">
+        <textarea id="content" placeholder="<!doctype html>...">&lt;!doctype html&gt;
+&lt;html&gt;&lt;head&gt;&lt;meta charset="utf-8"&gt;&lt;title&gt;测试页面&lt;/title&gt;&lt;/head&gt;
+&lt;body style="font-family:sans-serif;padding:40px;"&gt;
+  &lt;h1&gt;Hello&lt;/h1&gt;
+&lt;/body&gt;&lt;/html&gt;</textarea>
+      </div>
+
+      <div id="mode-file" style="display:none;">
+        <div class="drop" id="drop">
+          将 .html 文件拖到这里，或点击选择
+          <input type="file" id="file" accept=".html,.htm,.md,.markdown">
+        </div>
+        <div class="hint" id="filename"></div>
+      </div>
+    </fieldset>
+
+    <fieldset class="row">
+      <div>
+        <label>标题</label>
+        <input type="text" id="title" placeholder="我的页面" value="本地测试页面">
+      </div>
+      <div style="flex:0 0 100px;">
+        <label>Favicon（必填，1-2 个 emoji）</label>
+        <input type="text" id="favicon" value="📄" maxlength="4">
+      </div>
+    </fieldset>
+
+    <fieldset class="row">
+      <div>
+        <label>格式</label>
+        <select id="format">
+          <option value="html" selected>html</option>
+          <option value="markdown">markdown</option>
+        </select>
+      </div>
+      <div>
+        <label>密码保护（可选，留空则不加密）</label>
+        <input type="text" id="password" placeholder="不填=不加密">
+      </div>
+    </fieldset>
+
+    <button type="submit" id="submit">发布</button>
+  </form>
+
+  <div class="result" id="result">
+    <div class="label">状态</div>
+    <div id="result-body"></div>
+  </div>
+</div>
+
+<script>
+document.getElementById('origin').textContent = location.origin;
+
+const tabs = document.querySelectorAll('.tab');
+const modePaste = document.getElementById('mode-paste');
+const modeFile = document.getElementById('mode-file');
+let mode = 'paste';
+tabs.forEach(t => t.addEventListener('click', () => {
+  tabs.forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  mode = t.dataset.mode;
+  modePaste.style.display = mode === 'paste' ? '' : 'none';
+  modeFile.style.display = mode === 'file' ? '' : 'none';
+}));
+
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const filenameEl = document.getElementById('filename');
+let fileContent = null;
+let fileName = null;
+
+function readFile(file) {
+  fileName = file.name;
+  filenameEl.textContent = '已选择：' + file.name + '（' + file.size + ' bytes）';
+  const reader = new FileReader();
+  reader.onload = () => { fileContent = reader.result; };
+  reader.readAsText(file);
+}
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) readFile(fileInput.files[0]); });
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('drag'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('drag');
+  if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+});
+
+// --- 客户端加密：PBKDF2-HMAC-SHA256(600k) + AES-256-GCM，密码永不发往服务端 ---
+async function encrypt(plaintext, password) {
+  const enc = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 600000, hash: 'SHA-256' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt']
+  );
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+  const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  return {
+    content: b64(ciphertext),
+    encrypted: { salt: b64(salt), iv: b64(iv), iterations: 600000 },
+  };
+}
+
+const form = document.getElementById('f');
+const submitBtn = document.getElementById('submit');
+const resultEl = document.getElementById('result');
+const resultBody = document.getElementById('result-body');
+
+function showResult(kind, html) {
+  resultEl.className = 'result show ' + kind;
+  resultBody.innerHTML = html;
+}
+
+async function copyText(text, btn) {
+  await navigator.clipboard.writeText(text);
+  const old = btn.textContent;
+  btn.textContent = '已复制';
+  setTimeout(() => { btn.textContent = old; }, 1200);
+}
+window.copyText = copyText;
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  const raw = mode === 'paste' ? document.getElementById('content').value : fileContent;
+  if (!raw) {
+    showResult('err', '请先粘贴内容或选择文件。');
+    return;
+  }
+  const title = document.getElementById('title').value || undefined;
+  const favicon = document.getElementById('favicon').value;
+  if (!favicon) {
+    showResult('err', 'favicon 必填（1-2 个 emoji）。');
+    return;
+  }
+  let format = document.getElementById('format').value;
+  if (mode === 'file' && fileName && /\.(md|markdown)$/i.test(fileName)) format = 'markdown';
+  const password = document.getElementById('password').value;
+
+  const body = { title, favicon, format };
+  if (password) {
+    const { content, encrypted } = await encrypt(raw, password);
+    body.content = content;
+    body.encrypted = encrypted;
+  } else {
+    body.content = raw;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = '发布中…';
+  try {
+    const res = await fetch('/api/artifacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showResult('err', '发布失败：' + (data.error || res.status));
+      return;
+    }
+    const fullUrl = location.origin + '/a/' + data.id;
+    showResult('ok', `
+      <div class="label">链接</div>
+      <a href="${fullUrl}" target="_blank">${fullUrl}</a>
+      <div class="label" style="margin-top:10px;">Write Token（用于后续更新同一链接，只显示这一次）</div>
+      <a style="color:inherit;" href="#">${data.writeToken}</a>
+      <div class="actions">
+        <button type="button" class="ghost" onclick="copyText('${fullUrl}', this)">复制链接</button>
+        <button type="button" class="ghost" onclick="window.open('${fullUrl}','_blank')">打开预览</button>
+        <button type="button" class="ghost" onclick="copyText('${data.writeToken}', this)">复制 Write Token</button>
+      </div>
+    `);
+  } catch (err) {
+    showResult('err', '请求出错：' + err.message);
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = '发布';
+  }
+});
+</script>
+</body>
+</html>
