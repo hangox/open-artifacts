@@ -263,6 +263,21 @@ img,video,canvas{max-width:100%}
 @media (max-width:30rem){.oa-version .oa-version-select,.oa-visibility .oa-visibility-select{max-width:5rem;padding-right:1.4rem}}
 .oa-version .oa-version-select:focus-visible,.oa-visibility .oa-visibility-select:focus-visible{outline:none;border-color:var(--oa-accent);box-shadow:var(--oa-focus-ring)}
 @media (hover:hover) and (pointer:fine){.oa-version .oa-version-select:hover,.oa-visibility .oa-visibility-select:hover{background-color:color-mix(in oklab,var(--oa-fg),transparent 92%)}}
+.oa-visibility{position:relative}
+.oa-visibility-select{display:inline-flex;align-items:center;justify-content:space-between;gap:.75rem;text-align:left;white-space:nowrap}
+.oa-visibility-select:disabled{cursor:wait;opacity:.65}
+.oa-visibility-select[aria-expanded="true"]{border-color:var(--oa-accent);background-color:color-mix(in oklab,var(--oa-accent),transparent 92%)}
+.oa-visibility-value{overflow:hidden;text-overflow:ellipsis}
+.oa-visibility-menu{position:absolute;top:calc(100% + .25rem);right:0;z-index:2147483646;min-width:100%;width:max-content;max-width:min(16rem,calc(100vw - 1rem));padding:.25rem;border:1px solid var(--oa-border);border-radius:6px;background:var(--oa-bg);box-shadow:0 4px 12px -2px color-mix(in oklab,var(--oa-fg),transparent 78%);transform-origin:top right;animation:oa-visibility-menu-in .12s ease-out}
+.oa-visibility-menu[hidden]{display:none}
+.oa-visibility-option{position:relative;display:flex;align-items:center;justify-content:space-between;gap:1.25rem;min-height:30px;padding:.375rem 1.75rem .375rem .5rem;border:0;border-radius:4px;background:none;color:var(--oa-fg);font:inherit;font-size:.8rem;line-height:1.3;cursor:pointer;white-space:nowrap}
+.oa-visibility-option::after{position:absolute;right:.5rem;content:"✓";color:var(--oa-accent);font-weight:700;opacity:0}
+.oa-visibility-option[aria-selected="true"]{background:var(--oa-surface);font-weight:600}
+.oa-visibility-option[aria-selected="true"]::after{opacity:1}
+.oa-visibility-option[data-active="true"]{background:color-mix(in oklab,var(--oa-accent),transparent 88%)}
+.oa-visibility-option:focus-visible{outline:none;box-shadow:var(--oa-focus-ring)}
+@keyframes oa-visibility-menu-in{from{opacity:0;transform:translateY(-3px) scale(.98)}}
+@media (prefers-reduced-motion:reduce){.oa-visibility-menu{animation:none}}
 .oa-visibility-confirm{padding:.5rem;min-width:14rem;box-shadow:0 4px 12px -2px color-mix(in oklab,var(--oa-fg),transparent 78%)}
 .oa-visibility-confirm-text{font-size:.75rem;line-height:1.4;color:var(--oa-fg);margin-bottom:.5rem; padding:0 .25rem}
 .oa-visibility-confirm button{display:block;width:100%;text-align:left;padding:.375rem .5rem;border:0;border-radius:4px;background:none;color:var(--oa-fg);font:inherit;font-size:.8rem;cursor:pointer}
@@ -541,11 +556,14 @@ const VISIBILITY_LABELS: Record<Visibility, string> = {
 function visibilityPickerHtml(visibility: Visibility): string {
   const options = (["private", "org", "public"] as const)
     .map((value) => {
-      const selected = value === visibility ? " selected" : "";
-      return `<option value="${value}"${selected}>${VISIBILITY_LABELS[value]}</option>`;
+      const selected = value === visibility;
+      // 保留活动选项上的兼容属性，方便检查服务端渲染工具条的调用方；真正的
+      // 无障碍状态由 aria-selected 表达，交互控制器使用 data-value。
+      const legacy = selected ? ` value="${value}" selected` : "";
+      return `<div id="oa-visibility-option-${value}" class="oa-visibility-option" role="option" data-value="${value}" aria-selected="${selected}"${legacy}>${VISIBILITY_LABELS[value]}</div>`;
     })
     .join("");
-  return `<label class="oa-visibility" for="oa-visibility-select"><span class="oa-header-control-label" aria-hidden="true">Visibility</span><select id="oa-visibility-select" class="oa-visibility-select" aria-label="Artifact visibility">${options}</select></label>`;
+  return `<div class="oa-visibility"><span class="oa-header-control-label" aria-hidden="true">Visibility</span><button id="oa-visibility-select" class="oa-visibility-select" type="button" role="combobox" aria-label="Artifact visibility" aria-haspopup="listbox" aria-expanded="false" aria-controls="oa-visibility-menu" data-value="${visibility}"><span class="oa-visibility-value">${VISIBILITY_LABELS[visibility]}</span></button><div id="oa-visibility-menu" class="oa-visibility-menu" role="listbox" aria-label="Artifact visibility" hidden>${options}</div></div>`;
 }
 
 // The badge counts what the drawer's default view shows (open comments), so a
@@ -717,22 +735,59 @@ const VERSION_SCRIPT = `
 
 const VISIBILITY_SCRIPT = `
 (function(){
-  var sel=document.getElementById('oa-visibility-select');
-  if(!sel)return;
+  var trigger=document.getElementById('oa-visibility-select');
+  var menu=document.getElementById('oa-visibility-menu');
+  if(!trigger||!menu)return;
   var id=window.__oaBridgeId;
   if(!id)return;
-  var prev=sel.value;
-  var pendingNext=null;
-  // Confirm popover for public-exposure — reuses the dropdown-menu chrome.
+  var options=Array.prototype.slice.call(menu.querySelectorAll('[role="option"]'));
+  var prev=trigger.getAttribute('data-value')||'public';
+  var active=prev;
   var confirmPop=null;
+  function optionFor(value){
+    for(var i=0;i<options.length;i++)if(options[i].getAttribute('data-value')===value)return options[i];
+    return options[0]||null;
+  }
+  function render(value){
+    var option=optionFor(value);
+    if(!option)return;
+    trigger.setAttribute('data-value',value);
+    var label=trigger.querySelector('.oa-visibility-value');
+    if(label)label.textContent=option.textContent;
+    options.forEach(function(item){item.setAttribute('aria-selected',item===option?'true':'false')});
+  }
+  function setActive(value){
+    var option=optionFor(value);
+    if(!option)return;
+    active=option.getAttribute('data-value');
+    options.forEach(function(item){item.setAttribute('data-active',item===option?'true':'false')});
+    trigger.setAttribute('aria-activedescendant',option.id);
+  }
+  function clearActive(){
+    options.forEach(function(item){item.removeAttribute('data-active')});
+    trigger.removeAttribute('aria-activedescendant');
+  }
+  function closeMenu(restore){
+    menu.hidden=true;
+    trigger.setAttribute('aria-expanded','false');
+    clearActive();
+    if(restore)trigger.focus();
+  }
+  function openMenu(){
+    if(trigger.disabled)return;
+    menu.hidden=false;
+    trigger.setAttribute('aria-expanded','true');
+    setActive(trigger.getAttribute('data-value')||prev);
+  }
   function clearConfirm(){
     if(confirmPop){confirmPop.remove();confirmPop=null}
     document.removeEventListener('mousedown',outsideClick,true);
   }
   function outsideClick(e){
     if(confirmPop&&confirmPop.contains(e.target))return;
-    if(sel.contains(e.target))return;
-    clearConfirm();sel.value=prev;
+    if(trigger.contains(e.target)||menu.contains(e.target))return;
+    clearConfirm();
+    render(prev);
   }
   function showConfirm(next){
     clearConfirm();
@@ -744,10 +799,10 @@ const VISIBILITY_SCRIPT = `
     var yes=document.createElement('button');yes.type='button';yes.textContent='Make public';yes.className='oa-cm-del';
     var no=document.createElement('button');no.type='button';no.textContent='Cancel';
     yes.addEventListener('click',function(e){e.stopPropagation();clearConfirm();applyChange(next)});
-    no.addEventListener('click',function(e){e.stopPropagation();clearConfirm();sel.value=prev;sel.focus()});
+    no.addEventListener('click',function(e){e.stopPropagation();clearConfirm();render(prev);trigger.focus()});
     confirmPop.appendChild(yes);confirmPop.appendChild(no);
-    // Position below the select, clamped to the viewport.
-    var rect=sel.getBoundingClientRect();
+    // 将确认框放在触发按钮下方，并限制在视口范围内。
+    var rect=trigger.getBoundingClientRect();
     var popWidth=224; // min-width:14rem
     confirmPop.style.position='fixed';
     confirmPop.style.top=(rect.bottom+4)+'px';
@@ -755,38 +810,73 @@ const VISIBILITY_SCRIPT = `
     confirmPop.style.zIndex='2147483646';
     document.body.appendChild(confirmPop);
     document.addEventListener('mousedown',outsideClick,true);
-    confirmPop.addEventListener('keydown',function(e){if(e.key==='Escape'){e.preventDefault();clearConfirm();sel.value=prev;sel.focus()}});
+    confirmPop.addEventListener('keydown',function(e){if(e.key==='Escape'){e.preventDefault();clearConfirm();render(prev);trigger.focus()}});
     // Close on resize — position is captured at open time.
-    window.addEventListener('resize',function rs(){clearConfirm();sel.value=prev;window.removeEventListener('resize',rs)});
+    window.addEventListener('resize',function rs(){clearConfirm();render(prev);window.removeEventListener('resize',rs)});
     yes.focus();
   }
   function applyChange(next){
-    sel.disabled=true;
-    sel.setAttribute('aria-busy','true');
+    render(next);
+    trigger.disabled=true;
+    trigger.setAttribute('aria-busy','true');
     fetch('/api/artifacts/'+id,{method:'PATCH',headers:{'content-type':'application/json','X-OA-CSRF':'1'},body:JSON.stringify({visibility:next})})
       .then(function(r){if(!r.ok)throw new Error('Failed to update visibility');return r.json()})
       .then(function(){prev=next})
       .catch(function(e){
-        sel.value=prev;
+        render(prev);
         var msg=e.message||'Failed to update visibility. Please try again.';
         if(window.__oaShowError)window.__oaShowError(msg);
         else if(console&&console.error)console.error(msg);
       })
       .finally(function(){
-        sel.disabled=false;
-        sel.removeAttribute('aria-busy');
+        trigger.disabled=false;
+        trigger.removeAttribute('aria-busy');
       });
   }
-  sel.addEventListener('change',function(){
-    var next=sel.value;
-    // Gate public exposure: confirm when transitioning to public from a non-public state.
-    if(next==='public'&&prev!=='public'){
-      sel.value=prev;
-      showConfirm(next);
+  function choose(value){
+    closeMenu(false);
+    if(value==='public'&&prev!=='public'){
+      render(prev);
+      showConfirm(value);
       return;
     }
-    applyChange(next);
+    applyChange(value);
+  }
+  trigger.addEventListener('click',function(){
+    if(confirmPop){clearConfirm();render(prev)}
+    if(menu.hidden)openMenu();
+    else closeMenu(false);
   });
+  trigger.addEventListener('keydown',function(e){
+    var key=e.key;
+    var open=!menu.hidden;
+    if(key==='ArrowDown'||key==='ArrowUp'){
+      e.preventDefault();
+      if(!open)openMenu();
+      var index=options.indexOf(optionFor(active));
+      var nextIndex=key==='ArrowDown'?index+1:index-1;
+      if(nextIndex<0)nextIndex=options.length-1;
+      if(nextIndex>=options.length)nextIndex=0;
+      setActive(options[nextIndex].getAttribute('data-value'));
+      return;
+    }
+    if(key==='Enter'||key===' '||key==='Spacebar'){
+      e.preventDefault();
+      if(open)choose(active);
+      else openMenu();
+      return;
+    }
+    if(key==='Escape'&&open){e.preventDefault();closeMenu(true)}
+  });
+  menu.addEventListener('click',function(e){
+    var option=e.target.closest&&e.target.closest('[role="option"]');
+    if(option)choose(option.getAttribute('data-value'));
+  });
+  document.addEventListener('mousedown',function(e){
+    if(menu.hidden)return;
+    if(!trigger.contains(e.target)&&!menu.contains(e.target))closeMenu(false);
+  },true);
+  render(prev);
 })();
 `;
 
@@ -914,7 +1004,9 @@ const HEADER_SCRIPT = `
   });
   panel.addEventListener('click',function(e){
     var action=e.target.closest&&e.target.closest('button,a');
-    if(action&&!action.classList.contains('oa-account-btn'))close(false);
+    // 自定义可见性列表框位于响应式面板内；交互触发器或选项时保持面板打开，
+    // 避免像原生 select 那样在该监听器执行前把菜单移到面板外。
+    if(action&&!action.classList.contains('oa-account-btn')&&!action.classList.contains('oa-visibility-select'))close(false);
   });
   document.addEventListener('click',function(e){if(!root.contains(e.target))close(false)});
   document.addEventListener('keydown',function(e){if(e.key==="Escape"&&root.hasAttribute('data-open'))close(true)});
