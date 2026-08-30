@@ -23,6 +23,12 @@ import { generateNonce, userContentHeaders } from "./wrap";
 
 export type Bindings = Env & {
   CREATE_TOKEN?: string;
+  // POST /api/admin/gc 所需的 Bearer token。未设置或为空时始终锁定维护接口，
+  // 不会回退为公开访问。
+  ADMIN_TOKEN?: string;
+  // POST /api/admin/gc 的存储容量上限，单位为字节。必须是非负安全整数的字符串；
+  // 未设置或无效时接口以失败关闭方式拒绝执行。
+  MAX_STORAGE_BYTES?: string;
   BRAND_URL?: string;
   BRAND_NAME?: string;
   BRAND_WORDMARK?: string;
@@ -76,6 +82,16 @@ export function resolveMaxContentBytes(env: Bindings): number {
   return (mib > 0 ? mib : 4) * 1024 * 1024;
 }
 
+// MAX_STORAGE_BYTES 采用失败关闭策略：自托管磁盘配额没有安全的默认值，
+// 无效配置不能导致 GC 进行无界删除。允许配置为 0，以便运维明确清空 artifact
+// 存储；该值的单位是字节。
+export function resolveMaxStorageBytes(env: Bindings): number | null {
+  const raw = env.MAX_STORAGE_BYTES ?? "";
+  if (!/^\d+$/.test(raw)) return null;
+  const bytes = Number(raw);
+  return Number.isSafeInteger(bytes) && bytes >= 0 ? bytes : null;
+}
+
 // JSON escaping and encryption metadata inflate the body beyond the content
 // cap; anything past this is rejected before parsing.
 export const bodyCapFor = (maxContentBytes: number): number =>
@@ -117,6 +133,18 @@ function bearerToken(c: Context<AppContext>): string | null {
 }
 
 export { bearerToken };
+
+async function authorizeAdmin(c: Context<AppContext>): Promise<boolean> {
+  const configured = c.env.ADMIN_TOKEN;
+  if (typeof configured !== "string" || configured === "") return false;
+  const token = bearerToken(c);
+  // 比较前先对两边都做哈希，避免明文 secret 进入时序敏感的比较；缺少凭据时也
+  // 走与错误凭据相同的恒定时间比较路径。
+  return timingSafeEqual(
+    await sha256Hex(token ?? ""),
+    await sha256Hex(configured),
+  );
+}
 
 type AuthResult =
   | { ok: true; record: ArtifactRecord }
@@ -223,6 +251,64 @@ const isChannelBindingConflict = (error: unknown): boolean =>
   error instanceof Error &&
   error.message.includes("UNIQUE constraint failed") &&
   error.message.includes("channel_hash");
+
+// 供服务器 crontab 调用的维护接口。使用配置的精确上限，而不是任意的 90% 目标，
+// 避免删除额外用户数据；下一次调用会在再次超过上限前保持无操作。
+api.post("/admin/gc", async (c) => {
+  // ADMIN_TOKEN 缺失时明确保持锁定，绝不能变成公开接口。
+  if (typeof c.env.ADMIN_TOKEN !== "string" || c.env.ADMIN_TOKEN === "") {
+    return c.json({ error: "admin endpoint is not configured" }, 403);
+  }
+  const token = bearerToken(c);
+  if (!(await authorizeAdmin(c))) {
+    return c.json(
+      {
+        error:
+          token === null ? "missing bearer admin token" : "invalid admin token",
+      },
+      token === null ? 401 : 403,
+    );
+  }
+
+  const maxStorageBytes = resolveMaxStorageBytes(c.env);
+  if (maxStorageBytes === null) {
+    return c.json(
+      {
+        error:
+          "MAX_STORAGE_BYTES must be a non-negative safe integer number of bytes",
+      },
+      500,
+    );
+  }
+
+  const store = storeFrom(c);
+  const artifacts = await store.listArtifactStorage();
+  const usedBytesBefore = artifacts.reduce(
+    (total, artifact) => total + artifact.totalSize,
+    0,
+  );
+  let usedBytesAfter = usedBytesBefore;
+  const deletedArtifactIds: string[] = [];
+
+  if (usedBytesBefore > maxStorageBytes) {
+    for (const artifact of artifacts) {
+      if (usedBytesAfter <= maxStorageBytes) break;
+      // 复用规范删除路径，确保该 artifact 的 versions、comments、handoffs 以及
+      // R2 中分页列出的全部内容一起删除。
+      await store.delete(artifact.id);
+      deletedArtifactIds.push(artifact.id);
+      usedBytesAfter -= artifact.totalSize;
+    }
+  }
+
+  return c.json({
+    usedBytesBefore,
+    usedBytesAfter,
+    maxStorageBytes,
+    triggered: usedBytesBefore > maxStorageBytes,
+    deletedArtifactIds,
+  });
+});
 
 api.post("/artifacts", async (c) => {
   const maxContentBytes = resolveMaxContentBytes(c.env);

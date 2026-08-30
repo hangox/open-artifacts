@@ -23,6 +23,12 @@ export interface ArtifactRecord extends ArtifactMeta {
   visibility: Visibility;
 }
 
+export interface ArtifactStorage {
+  id: string;
+  createdAt: string;
+  totalSize: number;
+}
+
 export interface StoredContent {
   body: string;
   encrypted: EncryptionParams | null;
@@ -38,6 +44,7 @@ export interface ArtifactStore {
   ): Promise<ArtifactRecord>;
   get(id: string): Promise<ArtifactRecord | null>;
   findByChannel(channelHash: string): Promise<ArtifactRecord | null>;
+  listArtifactStorage(): Promise<ArtifactStorage[]>;
   listVersions(id: string): Promise<VersionMeta[]>;
   getContent(id: string, version: number): Promise<StoredContent | null>;
   // Authoritative per-version encrypted flag without reading the ≤4 MiB body.
@@ -523,6 +530,24 @@ export class D1R2Store implements ArtifactStore {
       .bind(channelHash)
       .first<ArtifactRow>();
     return row ? toRecord(row) : null;
+  }
+
+  async listArtifactStorage(): Promise<ArtifactStorage[]> {
+    await ensureSchema(this.db);
+    const { results } = await this.db
+      .prepare(
+        `SELECT a.id, a.created_at, COALESCE(SUM(v.size), 0) AS total_size
+         FROM artifacts AS a
+         LEFT JOIN versions AS v ON v.artifact_id = a.id
+         GROUP BY a.id, a.created_at
+         ORDER BY a.created_at ASC, a.id ASC`,
+      )
+      .all<{ id: string; created_at: string; total_size: number }>();
+    return results.map((row) => ({
+      id: row.id,
+      createdAt: row.created_at,
+      totalSize: row.total_size,
+    }));
   }
 
   async listVersions(id: string): Promise<VersionMeta[]> {
