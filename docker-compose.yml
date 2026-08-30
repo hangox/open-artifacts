@@ -1,0 +1,27 @@
+# Open Artifacts —— 自托管 Claude Code Artifacts 复刻版
+# 完全脱离 Cloudflare 云端：wrangler dev 本地跑 workerd 运行时，
+# D1/R2 均为本地文件持久化（映射到 ./data 卷）。
+# 部署：通过 Portainer Stacks
+# 反代：Caddy 站点 sites/oa.47lab.cn.caddy -> open-artifacts_open-artifacts:8787
+
+version: "3.8"
+
+services:
+  open-artifacts:
+    build: .
+    restart: unless-stopped
+    environment:
+      CREATE_TOKEN: "${CREATE_TOKEN}"
+      ADMIN_TOKEN: "${ADMIN_TOKEN}"
+      MAX_STORAGE_BYTES: "${MAX_STORAGE_BYTES:-10737418240}"
+    volumes:
+      - data:/app/.wrangler/state
+    networks:
+      - nginx
+
+volumes:
+  data:
+
+networks:
+  nginx:
+    external: true
