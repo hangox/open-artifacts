@@ -4045,7 +4045,7 @@ const UNLOCK_CSS = `
 .oa-card button:disabled{opacity:.6;cursor:wait}
 .oa-error{color:var(--oa-danger);font-size:.8rem;font-weight:500;min-height:1.2em;margin-top:.7rem}
 @media (hover:hover) and (pointer:fine){.oa-card button:hover:not(:disabled){background:color-mix(in oklab,var(--oa-fg),var(--oa-bg) 14%)}}
-#oa-frame{position:fixed;top:var(--oa-header-h);inset-inline:0;bottom:0;width:100%;border:0;display:none}
+#oa-frame{position:fixed;top:var(--oa-header-h);inset-inline:0;bottom:0;width:100%;height:calc(100dvh - var(--oa-header-h));border:0;display:none}
 `;
 
 export interface UnlockShellOptions {
